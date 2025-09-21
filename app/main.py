@@ -9,8 +9,28 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-MONERO_BASE = os.getenv("MONERO_SERVICE_URL", "http://monero:8004").rstrip("/")
-TX_BASE = os.getenv("TRANSACTIONS_SERVICE_URL", "http://transactions:8003").rstrip("/")
+def _normalize_service_url(val: str | None, kind: str) -> str:
+    # kind: "monero" or "transactions"
+    default = "http://api-manager:8000/monero" if kind == "monero" else "http://api-manager:8000/transactions"
+    if not val:
+        return default
+    v = val.strip().rstrip("/")
+    if "://" in v:
+        return v
+    name = v
+    # Map known containers to ports and paths
+    if name in {"api-manager", "pupero-api-manager"}:
+        base = f"http://{name}:8000"
+        return base + ("/monero" if kind == "monero" else "/transactions")
+    if name in {"monero", "pupero-monero"}:
+        return f"http://{name}:8004"
+    if name in {"transactions", "pupero-transactions"}:
+        return f"http://{name}:8003"
+    # Fallback: assume default ports
+    return default
+
+MONERO_BASE = _normalize_service_url(os.getenv("MONERO_SERVICE_URL"), "monero")
+TX_BASE = _normalize_service_url(os.getenv("TRANSACTIONS_SERVICE_URL"), "transactions")
 SWEEP_INTERVAL = int(os.getenv("SWEEP_INTERVAL_SECONDS", "1800"))
 MIN_SWEEP_XMR = float(os.getenv("MIN_SWEEP_XMR", "0.0001"))
 TARGET_SWEEP_ADDRESS = os.getenv("TARGET_SWEEP_ADDRESS")
