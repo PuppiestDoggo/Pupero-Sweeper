@@ -4,11 +4,11 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Install runtime deps
-COPY Sweeper/requirements.txt /app/requirements.txt
+COPY Pupero-Sweeper/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy code
-COPY Sweeper/app /app/app
+COPY Pupero-Sweeper/app /app/app
 
 # Environment defaults
 ENV SWEEP_INTERVAL_SECONDS=1800 \

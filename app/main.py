@@ -11,7 +11,8 @@ load_dotenv()
 
 def _normalize_service_url(val: str | None, kind: str) -> str:
     # kind: "monero" or "transactions"
-    default = "http://api-manager:8000/monero" if kind == "monero" else "http://api-manager:8000/transactions"
+    # Prefer direct service defaults to reduce proxy/startup coupling
+    default = "http://pupero-WalletManager:8004" if kind == "monero" else "http://pupero-transactions:8003"
     if not val:
         return default
     v = val.strip().rstrip("/")
@@ -22,11 +23,11 @@ def _normalize_service_url(val: str | None, kind: str) -> str:
     if name in {"api-manager", "pupero-api-manager"}:
         base = f"http://{name}:8000"
         return base + ("/monero" if kind == "monero" else "/transactions")
-    if name in {"monero", "pupero-monero"}:
+    if name in {"monero", "pupero-WalletManager"}:
         return f"http://{name}:8004"
     if name in {"transactions", "pupero-transactions"}:
         return f"http://{name}:8003"
-    # Fallback: assume default ports
+    # Fallback: assume direct service defaults
     return default
 
 MONERO_BASE = _normalize_service_url(os.getenv("MONERO_SERVICE_URL"), "monero")
@@ -45,13 +46,21 @@ if not logger.handlers:
 
 async def get_primary_address(client: httpx.AsyncClient) -> str:
     url = f"{MONERO_BASE}/primary_address"
-    r = await client.get(url, timeout=20.0)
-    r.raise_for_status()
-    data = r.json()
-    addr = data.get("address")
-    if not addr:
-        raise RuntimeError("primary_address returned no address")
-    return addr
+    last_err = None
+    for attempt in range(3):
+        try:
+            r = await client.get(url, timeout=20.0)
+            r.raise_for_status()
+            data = r.json()
+            addr = data.get("address")
+            if not addr:
+                raise RuntimeError("primary_address returned no address")
+            return addr
+        except Exception as e:
+            last_err = e
+            # small backoff to allow services to come up
+            await asyncio.sleep(1.0)
+    raise RuntimeError(str(last_err) if last_err else "failed to fetch primary_address")
 
 
 async def list_address_mappings(client: httpx.AsyncClient) -> List[Dict[str, Any]]:
@@ -79,11 +88,11 @@ async def sweep_from_address(client: httpx.AsyncClient, from_address: str, to_ad
     return total
 
 
-async def credit_fake_funds(client: httpx.AsyncClient, user_id: int, amount_xmr: float) -> None:
+async def credit_real_funds(client: httpx.AsyncClient, user_id: int, amount_xmr: float) -> None:
     if amount_xmr <= 0:
         return
     url = f"{TX_BASE}/balance/{user_id}/increase"
-    payload = {"amount_xmr": amount_xmr, "kind": "fake"}
+    payload = {"amount_xmr": amount_xmr, "kind": "real"}
     r = await client.post(url, json=payload, timeout=20.0)
     r.raise_for_status()
 
@@ -115,7 +124,7 @@ async def sweep_cycle():
                 if unlocked >= MIN_SWEEP_XMR:
                     swept = await sweep_from_address(client, addr, target)
                     if swept > 0:
-                        await credit_fake_funds(client, user_id, swept)
+                        await credit_real_funds(client, user_id, swept)
                         summary["swept"] += 1
                         summary["credited"] += swept
                         logger.info(json.dumps({"event": "swept_and_credited", "user_id": user_id, "from": addr, "to": target, "amount_xmr": swept}))
