@@ -3,6 +3,7 @@ import asyncio
 import logging
 import json
 from typing import Any, Dict, List
+from datetime import datetime, timezone
 
 import httpx
 from dotenv import load_dotenv
@@ -128,6 +129,23 @@ async def sweep_cycle():
                         summary["swept"] += 1
                         summary["credited"] += swept
                         logger.info(json.dumps({"event": "swept_and_credited", "user_id": user_id, "from": addr, "to": target, "amount_xmr": swept}))
+                # If this address is disabled and past deletion_date and now empty, delete mapping
+                try:
+                    is_disabled = bool(m.get("is_disabled", False))
+                    deletion_date = m.get("deletion_date")
+                    addr_id = m.get("id")
+                    if is_disabled and deletion_date and addr_id and unlocked < MIN_SWEEP_XMR:
+                        # Parse ISO date; handle possible 'Z' suffix
+                        try:
+                            cutoff = datetime.fromisoformat(str(deletion_date).replace("Z", "+00:00"))
+                        except Exception:
+                            cutoff = None
+                        if cutoff and datetime.now(timezone.utc) >= cutoff.replace(tzinfo=timezone.utc):
+                            dr = await client.delete(f"{MONERO_BASE}/addresses/{addr_id}", timeout=15.0)
+                            if dr.status_code in (200, 204):
+                                logger.info(json.dumps({"event": "address_deleted", "address_id": addr_id, "address": addr, "user_id": user_id}))
+                except Exception as e:
+                    logger.warning(json.dumps({"event": "address_delete_check_failed", "address": addr, "error": str(e)}))
             except httpx.HTTPStatusError as e:
                 logger.warning(json.dumps({"event": "address_process_http_error", "address": m.get("address"), "status": e.response.status_code if e.response else None}))
             except Exception as e:
